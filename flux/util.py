@@ -11,6 +11,8 @@ from flux.model import Flux, FluxParams
 from flux.modules.autoencoder import AutoEncoder, AutoEncoderParams
 from flux.modules.conditioner import HFEmbedder
 
+MODEL_CACHE = "models"
+
 
 @dataclass
 class ModelSpec:
@@ -204,7 +206,7 @@ def load_lora(model, lora_path: str, alpha: float = 1.0, device: str = "cuda"):
     
     Args:
         model: The base model to apply LoRA weights to
-        lora_path: Path to the LoRA safetensors file or HuggingFace repo URL (format: 'org/repo/file.safetensors' or local path)
+        lora_path: Path to the LoRA safetensors file or HuggingFace URL
         alpha: The weight to apply the LoRA (default: 1.0)
         device: Device to load the LoRA weights to (default: "cuda")
     
@@ -212,8 +214,13 @@ def load_lora(model, lora_path: str, alpha: float = 1.0, device: str = "cuda"):
         The model with LoRA weights applied
     """
     # Handle HuggingFace URLs
-    if '/' in lora_path and not os.path.exists(lora_path):
+    if not os.path.exists(lora_path):
         try:
+            # Handle full URLs
+            if lora_path.startswith('https://huggingface.co/'):
+                # Remove the base URL
+                lora_path = lora_path.replace('https://huggingface.co/', '')
+            
             # Split the path into repo_id and filename
             if lora_path.count('/') == 1:
                 # If only org/repo is provided, assume default filename
@@ -223,6 +230,10 @@ def load_lora(model, lora_path: str, alpha: float = 1.0, device: str = "cuda"):
                 # If full path is provided (org/repo/file.safetensors)
                 *repo_parts, filename = lora_path.split('/')
                 repo_id = '/'.join(repo_parts)
+                
+                # If no file extension provided, assume safetensors
+                if not filename.endswith('.safetensors'):
+                    filename = "lora.safetensors"
             
             print(f"Downloading LoRA from HuggingFace: {repo_id}/{filename}")
             lora_path = hf_hub_download(
