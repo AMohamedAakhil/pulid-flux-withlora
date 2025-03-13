@@ -2,20 +2,20 @@
 # Reference: https://cog.run/yaml
 
 build:
-  # set to true if your model requires a GPU
+  # Set to true if your model requires a GPU
   gpu: true
 
-  # a list of ubuntu apt packages to install
+  # A list of Ubuntu apt packages to install
   system_packages:
     - "libgl1-mesa-glx"
     - "libglib2.0-0"
     - "libjpeg-dev"
     - "libpng-dev"
 
-  # python version in the form '3.11' or '3.11.4'
-  python_version: "3.10.14"
+  # Ensure Python is correctly installed in your environment
+  python_version: "3.12"
 
-  # a list of packages in the format <package-name>==<version>
+  # A list of packages in the format <package-name>==<version>
   python_packages:
     - torch==2.0.1
     - torchvision==0.15.2
@@ -37,18 +37,20 @@ build:
     - safetensors
     - invisible-watermark
     - setuptools
-    # https://github.com/replicate/cog/issues/1623
+    # Fix known issues
     - "albumentations==1.4.3"
     - "pydantic==1.10.11"
 
-
-  # commands run after the environment is setup
+  # Commands run after the environment is set up
   run:
     - curl -o /usr/local/bin/pget -L "https://github.com/replicate/pget/releases/download/v0.8.2/pget_linux_x86_64" && chmod +x /usr/local/bin/pget
-    - pip install --upgrade torch numpy torchvision
-    - "sed -i '8s/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' /root/.pyenv/versions/3.10.14/lib/python3.10/site-packages/basicsr/data/degradations.py"
+    - python3 -m ensurepip --upgrade
+    - python3 -m pip install --upgrade pip torch numpy torchvision
+    # Dynamically find and modify basicsr degradation file
+    - python3 -c "import basicsr, os; f=os.path.join(os.path.dirname(basicsr.__file__), 'data/degradations.py'); os.system(f'sed -i \"8s/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/\" {f}') if os.path.exists(f) else print(\"WARNING: basicsr/data/degradations.py not found, skipping fix.\")"
 
-
+# This is the required missing field!
+command: "python3 predict.py"
 
 # predict.py defines how predictions are run on your model
 predict: "predict.py:Predictor"
