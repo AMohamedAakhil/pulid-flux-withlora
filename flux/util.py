@@ -196,3 +196,72 @@ WATERMARK_MESSAGE = 0b001010101111111010000111100111001111010100101110
 # bin(x)[2:] gives bits of x as str, use int to convert them to 0/1
 WATERMARK_BITS = [int(bit) for bit in bin(WATERMARK_MESSAGE)[2:]]
 embed_watermark = WatermarkEmbedder(WATERMARK_BITS)
+
+
+def load_lora(model, lora_path: str, alpha: float = 1.0, device: str = "cuda"):
+    """
+    Load and apply LoRA weights to the model.
+    
+    Args:
+        model: The base model to apply LoRA weights to
+        lora_path: Path to the LoRA safetensors file or HuggingFace repo URL (format: 'org/repo/file.safetensors' or local path)
+        alpha: The weight to apply the LoRA (default: 1.0)
+        device: Device to load the LoRA weights to (default: "cuda")
+    
+    Returns:
+        The model with LoRA weights applied
+    """
+    # Handle HuggingFace URLs
+    if '/' in lora_path and not os.path.exists(lora_path):
+        try:
+            # Split the path into repo_id and filename
+            if lora_path.count('/') == 1:
+                # If only org/repo is provided, assume default filename
+                repo_id = lora_path
+                filename = "lora.safetensors"
+            else:
+                # If full path is provided (org/repo/file.safetensors)
+                *repo_parts, filename = lora_path.split('/')
+                repo_id = '/'.join(repo_parts)
+            
+            print(f"Downloading LoRA from HuggingFace: {repo_id}/{filename}")
+            lora_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                local_dir=MODEL_CACHE,
+                cache_dir=MODEL_CACHE,
+                local_dir_use_symlinks=False
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to download LoRA from HuggingFace: {str(e)}")
+
+    if not os.path.exists(lora_path):
+        raise FileNotFoundError(f"LoRA file not found: {lora_path}")
+
+    # Load LoRA weights
+    lora_state_dict = load_sft(lora_path, device=str(device))
+    
+    # Get original state dict
+    orig_state_dict = model.state_dict()
+    
+    # Apply LoRA weights
+    for key in lora_state_dict:
+        if 'lora_down' in key:
+            base_key = key.replace('lora_down', '')
+            up_key = key.replace('lora_down', 'lora_up')
+            
+            if up_key in lora_state_dict and base_key in orig_state_dict:
+                # Compute the merged weights
+                down_weight = lora_state_dict[key].float()
+                up_weight = lora_state_dict[up_key].float()
+                
+                # Merge weights: original + (up × down) × alpha
+                delta = (up_weight @ down_weight) * alpha
+                orig_weight = orig_state_dict[base_key].float()
+                orig_state_dict[base_key] = (orig_weight + delta).to(orig_weight.dtype)
+    
+    # Load the merged weights back into the model
+    missing, unexpected = model.load_state_dict(orig_state_dict, strict=False)
+    print_load_warning(missing, unexpected)
+    
+    return model

@@ -13,7 +13,7 @@ import time
 
 from flux.cli import SamplingOptions
 from flux.sampling import denoise, get_noise, get_schedule, prepare, unpack, get_noise_batch
-from flux.util import load_ae, load_clip, load_flow_model, load_t5
+from flux.util import load_ae, load_clip, load_flow_model, load_t5, load_lora
 from pulid.pipeline_flux import PuLIDPipeline
 from pulid.utils import resize_numpy_image_long
 # from huggingface_hub import login
@@ -155,9 +155,16 @@ class Predictor(BasePredictor):
             description="Set the quality of the output image for jpg and webp (1-100)", ge=1, le=100, default=80
         ),
         num_outputs: int = Input(description="Set the number of images to generate (1-4)", ge=1, le=4, default=1),
+        lora_path: str = Input(description="Path to a LoRA safetensors file to use for fine-tuning", default=None),
+        lora_alpha: float = Input(description="Weight of LoRA adaptation (0.0-1.0)", ge=0.0, le=1.0, default=0.75),
     ) -> List[Path]:
         """Run a single prediction on the model to generate multiple outputs"""
         start_time = time.time()
+
+        # Apply LoRA if provided
+        if lora_path is not None:
+            print(f"Loading LoRA weights from {lora_path}")
+            self.model = load_lora(self.model, lora_path, alpha=lora_alpha, device=self.device)
 
         # Generate a list of seeds for each output to ensure uniqueness
         if seed is None or seed == -1:
