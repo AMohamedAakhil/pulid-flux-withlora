@@ -340,6 +340,10 @@ def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cu
         orig_state_dict = model.state_dict()
         print(f"[LoRA] Base model has {len(orig_state_dict)} keys")
         
+        # Print some example keys from both state dicts
+        print("[LoRA] Example model keys:", list(orig_state_dict.keys())[:5])
+        print("[LoRA] Example LoRA keys:", list(lora_state_dict.keys())[:5])
+        
         # Find all LoRA keys
         lora_keys = [k for k in lora_state_dict.keys() if 'lora_' in k]
         print(f"[LoRA] Found {len(lora_keys)} LoRA keys")
@@ -348,11 +352,20 @@ def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cu
             print("[LoRA] Warning: No LoRA keys found in the loaded weights")
             return model
             
+        # Print some example LoRA keys
+        print("[LoRA] Example LoRA keys with 'lora_' prefix:", lora_keys[:5])
+            
         # Apply LoRA weights
         modified_keys = []
         for key in lora_keys:
             if 'lora_down' in key:
+                # Try different ways to get the base key
                 base_key = key.replace('lora_down', '')
+                # Also try removing any prefixes that might be in the LoRA keys
+                base_key = base_key.replace('model.', '')
+                base_key = base_key.replace('diffusion_model.', '')
+                base_key = base_key.replace('transformer.', '')
+                
                 up_key = key.replace('lora_down', 'lora_up')
                 
                 if up_key in lora_state_dict and base_key in orig_state_dict:
@@ -366,6 +379,12 @@ def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cu
                     orig_weight = orig_state_dict[base_key].float()
                     orig_state_dict[base_key] = (orig_weight + delta).to(orig_weight.dtype)
                     modified_keys.append(base_key)
+                else:
+                    print(f"[LoRA] Could not find matching keys for {key}")
+                    print(f"[LoRA] Base key: {base_key}")
+                    print(f"[LoRA] Up key: {up_key}")
+                    print(f"[LoRA] Base key exists: {base_key in orig_state_dict}")
+                    print(f"[LoRA] Up key exists: {up_key in lora_state_dict}")
         
         print(f"[LoRA] Modified {len(modified_keys)} keys in the model")
         
