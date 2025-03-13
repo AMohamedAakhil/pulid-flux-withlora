@@ -340,12 +340,6 @@ def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cu
         orig_state_dict = model.state_dict()
         print(f"[LoRA] Base model has {len(orig_state_dict)} keys")
         
-        # Print all model keys to understand the structure
-        print("[LoRA] All model keys:")
-        for key in orig_state_dict.keys():
-            if 'transformer' in key or 'attn' in key:
-                print(f"  {key}")
-        
         # Find all LoRA keys
         lora_keys = [k for k in lora_state_dict.keys() if 'lora_' in k]
         print(f"[LoRA] Found {len(lora_keys)} LoRA keys")
@@ -376,14 +370,30 @@ def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cu
         
         print(f"[LoRA] Found {len(lora_groups)} LoRA weight groups")
         
+        # Map between naming schemes
+        key_mapping = {
+            'transformer.single_transformer_blocks': 'double_blocks',
+            'attn.to_q': 'img_attn.qkv',
+            'attn.to_k': 'img_attn.qkv',
+            'attn.to_v': 'img_attn.qkv',
+            'attn.to_out.0': 'img_attn.proj',
+            'norm.linear': 'img_attn.norm',
+            'proj_mlp': 'img_attn.mlp',
+            'proj_out': 'img_attn.proj'
+        }
+        
         # Try to map transformer keys to FLUX model keys
         for base_key, weights in lora_groups.items():
             if weights['A'] is None or weights['B'] is None:
                 continue
                 
             # Try to map the transformer key to a FLUX key
-            # Keep the transformer prefix as it might be part of the model structure
             flux_key = base_key
+            for old, new in key_mapping.items():
+                flux_key = flux_key.replace(old, new)
+            
+            # Remove any trailing dots
+            flux_key = flux_key.rstrip('.')
             
             if flux_key in orig_state_dict:
                 print(f"[LoRA] Applying LoRA to {flux_key}")
@@ -394,6 +404,14 @@ def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cu
                 # Merge weights: original + (B × A) × alpha
                 delta = (weight_B @ weight_A) * alpha
                 orig_weight = orig_state_dict[flux_key].float()
+                
+                # Handle different shapes for QKV
+                if 'qkv' in flux_key:
+                    # Expand delta to match QKV shape
+                    if delta.shape[0] != orig_weight.shape[0]:
+                        delta = delta.repeat(3, 1)
+                
+                # Add the delta and convert back to original dtype
                 orig_state_dict[flux_key] = (orig_weight + delta).to(orig_weight.dtype)
                 modified_keys.append(flux_key)
             else:
@@ -401,6 +419,8 @@ def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cu
                 print(f"[LoRA] Attempted to map to: {flux_key}")
         
         print(f"[LoRA] Modified {len(modified_keys)} keys in the model")
+        if modified_keys:
+            print("[LoRA] First few modified keys:", modified_keys[:5])
         
         # Load the merged weights back into the model
         missing, unexpected = model.load_state_dict(orig_state_dict, strict=False)
