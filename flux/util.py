@@ -340,9 +340,11 @@ def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cu
         orig_state_dict = model.state_dict()
         print(f"[LoRA] Base model has {len(orig_state_dict)} keys")
         
-        # Print some example keys from both state dicts
-        print("[LoRA] Example model keys:", list(orig_state_dict.keys())[:5])
-        print("[LoRA] Example LoRA keys:", list(lora_state_dict.keys())[:5])
+        # Print all model keys to understand the structure
+        print("[LoRA] All model keys:")
+        for key in orig_state_dict.keys():
+            if 'transformer' in key or 'attn' in key:
+                print(f"  {key}")
         
         # Find all LoRA keys
         lora_keys = [k for k in lora_state_dict.keys() if 'lora_' in k]
@@ -357,34 +359,46 @@ def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cu
             
         # Apply LoRA weights
         modified_keys = []
+        
+        # Group LoRA keys by their base name (without lora_A/B)
+        lora_groups = {}
         for key in lora_keys:
-            if 'lora_down' in key:
-                # Try different ways to get the base key
-                base_key = key.replace('lora_down', '')
-                # Also try removing any prefixes that might be in the LoRA keys
-                base_key = base_key.replace('model.', '')
-                base_key = base_key.replace('diffusion_model.', '')
-                base_key = base_key.replace('transformer.', '')
+            if 'lora_A' in key:
+                base_key = key.replace('lora_A', '')
+                if base_key not in lora_groups:
+                    lora_groups[base_key] = {'A': None, 'B': None}
+                lora_groups[base_key]['A'] = key
+            elif 'lora_B' in key:
+                base_key = key.replace('lora_B', '')
+                if base_key not in lora_groups:
+                    lora_groups[base_key] = {'A': None, 'B': None}
+                lora_groups[base_key]['B'] = key
+        
+        print(f"[LoRA] Found {len(lora_groups)} LoRA weight groups")
+        
+        # Try to map transformer keys to FLUX model keys
+        for base_key, weights in lora_groups.items():
+            if weights['A'] is None or weights['B'] is None:
+                continue
                 
-                up_key = key.replace('lora_down', 'lora_up')
+            # Try to map the transformer key to a FLUX key
+            # Keep the transformer prefix as it might be part of the model structure
+            flux_key = base_key
+            
+            if flux_key in orig_state_dict:
+                print(f"[LoRA] Applying LoRA to {flux_key}")
+                # Compute the merged weights
+                weight_A = lora_state_dict[weights['A']].float()
+                weight_B = lora_state_dict[weights['B']].float()
                 
-                if up_key in lora_state_dict and base_key in orig_state_dict:
-                    print(f"[LoRA] Applying LoRA to {base_key}")
-                    # Compute the merged weights
-                    down_weight = lora_state_dict[key].float()
-                    up_weight = lora_state_dict[up_key].float()
-                    
-                    # Merge weights: original + (up × down) × alpha
-                    delta = (up_weight @ down_weight) * alpha
-                    orig_weight = orig_state_dict[base_key].float()
-                    orig_state_dict[base_key] = (orig_weight + delta).to(orig_weight.dtype)
-                    modified_keys.append(base_key)
-                else:
-                    print(f"[LoRA] Could not find matching keys for {key}")
-                    print(f"[LoRA] Base key: {base_key}")
-                    print(f"[LoRA] Up key: {up_key}")
-                    print(f"[LoRA] Base key exists: {base_key in orig_state_dict}")
-                    print(f"[LoRA] Up key exists: {up_key in lora_state_dict}")
+                # Merge weights: original + (B × A) × alpha
+                delta = (weight_B @ weight_A) * alpha
+                orig_weight = orig_state_dict[flux_key].float()
+                orig_state_dict[flux_key] = (orig_weight + delta).to(orig_weight.dtype)
+                modified_keys.append(flux_key)
+            else:
+                print(f"[LoRA] Could not find matching key for {base_key}")
+                print(f"[LoRA] Attempted to map to: {flux_key}")
         
         print(f"[LoRA] Modified {len(modified_keys)} keys in the model")
         
