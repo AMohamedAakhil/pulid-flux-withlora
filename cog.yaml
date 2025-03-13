@@ -46,7 +46,8 @@ build:
     - curl -o /usr/local/bin/pget -L "https://github.com/replicate/pget/releases/download/v0.8.2/pget_linux_x86_64" && chmod +x /usr/local/bin/pget
     - pip install --upgrade torch numpy torchvision
     - pip install basicsr
-    - "sed -i '8s/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' /root/.local/lib/python3.10/site-packages/basicsr/data/degradations.py"
+    - "BASICSR_PATH=$(pip show basicsr | grep Location | cut -d ' ' -f 2)/basicsr/data/degradations.py"
+    - "sed -i '8s/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' $BASICSR_PATH"
 
 
 
