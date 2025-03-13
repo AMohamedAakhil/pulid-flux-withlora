@@ -155,16 +155,27 @@ class Predictor(BasePredictor):
             description="Set the quality of the output image for jpg and webp (1-100)", ge=1, le=100, default=80
         ),
         num_outputs: int = Input(description="Set the number of images to generate (1-4)", ge=1, le=4, default=1),
-        lora_path: str = Input(description="Path to a LoRA safetensors file to use for fine-tuning", default=None),
-        lora_alpha: float = Input(description="Weight of LoRA adaptation (0.0-1.0)", ge=0.0, le=1.0, default=0.75),
+        lora_path: str = Input(
+            description="Path to a LoRA. Supports local files, HuggingFace URLs (huggingface.co/...), CivitAI URLs (civitai.com/...), Replicate models (owner/model or owner/model/version), or direct URLs",
+            default=None
+        ),
+        lora_scale: float = Input(
+            description="Weight of LoRA adaptation (0.0-1.0)", 
+            ge=0.0, 
+            le=1.0, 
+            default=0.75
+        ),
     ) -> List[Path]:
         """Run a single prediction on the model to generate multiple outputs"""
         start_time = time.time()
 
         # Apply LoRA if provided
-        if lora_path is not None:
-            print(f"Loading LoRA weights from {lora_path}")
-            self.model = load_lora(self.model, lora_path, alpha=lora_alpha, device=self.device)
+        if lora_path:
+            print(f"Loading LoRA from: {lora_path}")
+            try:
+                self.model = load_lora(self.model, lora_path, alpha=lora_scale, device=self.device)
+            except Exception as e:
+                print(f"Warning: Failed to load LoRA: {str(e)}")
 
         # Generate a list of seeds for each output to ensure uniqueness
         if seed is None or seed == -1:

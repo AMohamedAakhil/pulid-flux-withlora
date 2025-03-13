@@ -1,5 +1,10 @@
 import os
 from dataclasses import dataclass
+import re
+import time
+import requests
+from pathlib import Path
+from urllib.parse import urlparse
 
 import torch
 from einops import rearrange
@@ -200,79 +205,178 @@ WATERMARK_BITS = [int(bit) for bit in bin(WATERMARK_MESSAGE)[2:]]
 embed_watermark = WatermarkEmbedder(WATERMARK_BITS)
 
 
-def load_lora(model, lora_path: str, alpha: float = 1.0, device: str = "cuda"):
+def download_from_civitai(url: str) -> str:
+    """Download a LoRA from CivitAI."""
+    try:
+        # Extract model ID from URL
+        model_id = re.search(r'civitai\.com/models/(\d+)', url).group(1)
+        api_url = f"https://civitai.com/api/v1/models/{model_id}"
+        
+        # Get model info
+        response = requests.get(api_url)
+        response.raise_for_status()
+        model_info = response.json()
+        
+        # Get download URL from the latest version
+        download_url = model_info["modelVersions"][0]["files"][0]["downloadUrl"]
+        
+        # Download the file
+        local_path = os.path.join(MODEL_CACHE, f"civitai_{model_id}.safetensors")
+        response = requests.get(download_url)
+        response.raise_for_status()
+        
+        with open(local_path, "wb") as f:
+            f.write(response.content)
+            
+        return local_path
+    except Exception as e:
+        raise RuntimeError(f"Failed to download from CivitAI: {str(e)}")
+
+def download_from_replicate(model_path: str) -> str:
+    """Download a LoRA from Replicate."""
+    try:
+        # Parse model path (owner/model or owner/model/version)
+        parts = model_path.split('/')
+        if len(parts) == 2:
+            owner, model = parts
+            version = "latest"  # You might want to implement a way to get latest version
+        else:
+            owner, model, version = parts
+            
+        # Construct download URL (you'll need to implement this based on Replicate's API)
+        download_url = f"https://replicate.delivery/{owner}/{model}/{version}/lora.safetensors"
+        
+        # Download the file
+        local_path = os.path.join(MODEL_CACHE, f"replicate_{owner}_{model}_{version}.safetensors")
+        response = requests.get(download_url)
+        response.raise_for_status()
+        
+        with open(local_path, "wb") as f:
+            f.write(response.content)
+            
+        return local_path
+    except Exception as e:
+        raise RuntimeError(f"Failed to download from Replicate: {str(e)}")
+
+def download_from_url(url: str) -> str:
+    """Download a LoRA from a direct URL."""
+    try:
+        local_path = os.path.join(MODEL_CACHE, os.path.basename(url))
+        response = requests.get(url)
+        response.raise_for_status()
+        
+        with open(local_path, "wb") as f:
+            f.write(response.content)
+            
+        return local_path
+    except Exception as e:
+        raise RuntimeError(f"Failed to download from URL: {str(e)}")
+
+def resolve_lora_path(lora_path: str) -> str:
+    """
+    Resolve various LoRA path formats to a local file path.
+    Supports:
+    - Local files
+    - HuggingFace URLs (huggingface.co/...)
+    - CivitAI URLs (civitai.com/...)
+    - Replicate models (owner/model or owner/model/version)
+    - Direct URLs (http(s)://...)
+    """
+    if not lora_path:
+        return None
+        
+    # If it's already a local file
+    if os.path.exists(lora_path):
+        return lora_path
+        
+    # Create cache directory if it doesn't exist
+    os.makedirs(MODEL_CACHE, exist_ok=True)
+    
+    # Parse URL if it's a URL
+    try:
+        parsed = urlparse(lora_path)
+        if parsed.scheme in ['http', 'https']:
+            if 'huggingface.co' in parsed.netloc:
+                # Remove the base URL and get repo_id/file_path
+                path = lora_path.replace('https://huggingface.co/', '')
+                if not path.endswith('.safetensors'):
+                    path = f"{path}/lora.safetensors"
+                repo_id = '/'.join(path.split('/')[:-1])
+                filename = path.split('/')[-1]
+                return hf_hub_download(
+                    repo_id=repo_id,
+                    filename=filename,
+                    local_dir=MODEL_CACHE,
+                    cache_dir=MODEL_CACHE,
+                    local_dir_use_symlinks=False
+                )
+            elif 'civitai.com' in parsed.netloc:
+                return download_from_civitai(lora_path)
+            else:
+                return download_from_url(lora_path)
+    except Exception:
+        pass
+    
+    # If it's in the format owner/model[/version], treat as Replicate model
+    if re.match(r'^[\w-]+/[\w-]+(?:/[\w-]+)?$', lora_path):
+        return download_from_replicate(lora_path)
+        
+    raise ValueError(f"Invalid LoRA path format: {lora_path}")
+
+def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cuda"):
     """
     Load and apply LoRA weights to the model.
     
     Args:
         model: The base model to apply LoRA weights to
-        lora_path: Path to the LoRA safetensors file or HuggingFace URL
+        lora_path: Path to the LoRA. Can be:
+            - Local file path
+            - HuggingFace URL (huggingface.co/...)
+            - CivitAI URL (civitai.com/...)
+            - Replicate model (owner/model or owner/model/version)
+            - Direct URL to .safetensors file
         alpha: The weight to apply the LoRA (default: 1.0)
         device: Device to load the LoRA weights to (default: "cuda")
     
     Returns:
         The model with LoRA weights applied
     """
-    # Handle HuggingFace URLs
-    if not os.path.exists(lora_path):
-        try:
-            # Handle full URLs
-            if lora_path.startswith('https://huggingface.co/'):
-                # Remove the base URL
-                lora_path = lora_path.replace('https://huggingface.co/', '')
+    try:
+        # Resolve the LoRA path to a local file
+        local_path = resolve_lora_path(lora_path)
+        if not local_path:
+            return model
             
-            # Split the path into repo_id and filename
-            if lora_path.count('/') == 1:
-                # If only org/repo is provided, assume default filename
-                repo_id = lora_path
-                filename = "lora.safetensors"
-            else:
-                # If full path is provided (org/repo/file.safetensors)
-                *repo_parts, filename = lora_path.split('/')
-                repo_id = '/'.join(repo_parts)
+        print(f"Loading LoRA from: {local_path}")
+        
+        # Load LoRA weights
+        lora_state_dict = load_sft(local_path, device=str(device))
+        
+        # Get original state dict
+        orig_state_dict = model.state_dict()
+        
+        # Apply LoRA weights
+        for key in lora_state_dict:
+            if 'lora_down' in key:
+                base_key = key.replace('lora_down', '')
+                up_key = key.replace('lora_down', 'lora_up')
                 
-                # If no file extension provided, assume safetensors
-                if not filename.endswith('.safetensors'):
-                    filename = "lora.safetensors"
-            
-            print(f"Downloading LoRA from HuggingFace: {repo_id}/{filename}")
-            lora_path = hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                local_dir=MODEL_CACHE,
-                cache_dir=MODEL_CACHE,
-                local_dir_use_symlinks=False
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to download LoRA from HuggingFace: {str(e)}")
-
-    if not os.path.exists(lora_path):
-        raise FileNotFoundError(f"LoRA file not found: {lora_path}")
-
-    # Load LoRA weights
-    lora_state_dict = load_sft(lora_path, device=str(device))
-    
-    # Get original state dict
-    orig_state_dict = model.state_dict()
-    
-    # Apply LoRA weights
-    for key in lora_state_dict:
-        if 'lora_down' in key:
-            base_key = key.replace('lora_down', '')
-            up_key = key.replace('lora_down', 'lora_up')
-            
-            if up_key in lora_state_dict and base_key in orig_state_dict:
-                # Compute the merged weights
-                down_weight = lora_state_dict[key].float()
-                up_weight = lora_state_dict[up_key].float()
-                
-                # Merge weights: original + (up × down) × alpha
-                delta = (up_weight @ down_weight) * alpha
-                orig_weight = orig_state_dict[base_key].float()
-                orig_state_dict[base_key] = (orig_weight + delta).to(orig_weight.dtype)
-    
-    # Load the merged weights back into the model
-    missing, unexpected = model.load_state_dict(orig_state_dict, strict=False)
-    print_load_warning(missing, unexpected)
-    
-    return model
+                if up_key in lora_state_dict and base_key in orig_state_dict:
+                    # Compute the merged weights
+                    down_weight = lora_state_dict[key].float()
+                    up_weight = lora_state_dict[up_key].float()
+                    
+                    # Merge weights: original + (up × down) × alpha
+                    delta = (up_weight @ down_weight) * alpha
+                    orig_weight = orig_state_dict[base_key].float()
+                    orig_state_dict[base_key] = (orig_weight + delta).to(orig_weight.dtype)
+        
+        # Load the merged weights back into the model
+        missing, unexpected = model.load_state_dict(orig_state_dict, strict=False)
+        print_load_warning(missing, unexpected)
+        
+        return model
+        
+    except Exception as e:
+        print(f"Warning: Failed to load LoRA from {lora_path}: {str(e)}")
+        return model

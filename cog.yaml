@@ -27,6 +27,7 @@ build:
     - timm
     - einops
     - ftfy
+    - basicsr
     - facexlib
     - insightface
     - onnxruntime-gpu
@@ -36,6 +37,7 @@ build:
     - safetensors
     - invisible-watermark
     - setuptools
+    - requests>=2.31.0
     # https://github.com/replicate/cog/issues/1623
     - "albumentations==1.4.3"
     - "pydantic==1.10.11"
