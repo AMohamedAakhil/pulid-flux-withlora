@@ -348,8 +348,8 @@ def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cu
             print("[LoRA] Warning: No LoRA keys found in the loaded weights")
             return model
             
-        # Print some example LoRA keys
-        print("[LoRA] Example LoRA keys with 'lora_' prefix:", lora_keys[:5])
+        # Print some example LoRA keys for debugging
+        print("[LoRA] Example LoRA keys:", lora_keys[:5])
             
         # Apply LoRA weights
         modified_keys = []
@@ -357,29 +357,29 @@ def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cu
         # Group LoRA keys by their base name (without lora_A/B)
         lora_groups = {}
         for key in lora_keys:
+            base_key = key.replace('.lora_A.weight', '').replace('.lora_B.weight', '')
+            if base_key not in lora_groups:
+                lora_groups[base_key] = {'A': None, 'B': None}
             if 'lora_A' in key:
-                base_key = key.replace('lora_A', '')
-                if base_key not in lora_groups:
-                    lora_groups[base_key] = {'A': None, 'B': None}
                 lora_groups[base_key]['A'] = key
             elif 'lora_B' in key:
-                base_key = key.replace('lora_B', '')
-                if base_key not in lora_groups:
-                    lora_groups[base_key] = {'A': None, 'B': None}
                 lora_groups[base_key]['B'] = key
         
         print(f"[LoRA] Found {len(lora_groups)} LoRA weight groups")
         
-        # Map between naming schemes
+        # Define key mapping for transformer blocks
         key_mapping = {
-            'transformer.single_transformer_blocks': 'double_blocks',
+            'transformer.': '',  # Remove transformer prefix
+            'single_transformer_blocks': 'single_blocks',
+            'double_transformer_blocks': 'double_blocks',
             'attn.to_q': 'img_attn.qkv',
             'attn.to_k': 'img_attn.qkv',
             'attn.to_v': 'img_attn.qkv',
             'attn.to_out.0': 'img_attn.proj',
-            'norm.linear': 'img_attn.norm',
-            'proj_mlp': 'img_attn.mlp',
-            'proj_out': 'img_attn.proj'
+            'mlp.fc1': 'img_mlp.0',
+            'mlp.fc2': 'img_mlp.2',
+            'norm1': 'img_norm1',
+            'norm2': 'img_norm2'
         }
         
         # Try to map transformer keys to FLUX model keys
@@ -407,9 +407,11 @@ def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cu
                 
                 # Handle different shapes for QKV
                 if 'qkv' in flux_key:
-                    # Expand delta to match QKV shape
+                    # FLUX combines Q, K, V into a single tensor
+                    # Expand delta to match QKV shape if needed
                     if delta.shape[0] != orig_weight.shape[0]:
-                        delta = delta.repeat(3, 1)
+                        # Assuming the order is Q, K, V
+                        delta = torch.cat([delta] * 3, dim=0)
                 
                 # Add the delta and convert back to original dtype
                 orig_state_dict[flux_key] = (orig_weight + delta).to(orig_weight.dtype)
@@ -417,6 +419,10 @@ def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cu
             else:
                 print(f"[LoRA] Could not find matching key for {base_key}")
                 print(f"[LoRA] Attempted to map to: {flux_key}")
+                # Print the actual keys in the model that are similar
+                similar_keys = [k for k in orig_state_dict.keys() if any(part in k for part in flux_key.split('.'))]
+                if similar_keys:
+                    print(f"[LoRA] Similar keys in model: {similar_keys[:5]}")
         
         print(f"[LoRA] Modified {len(modified_keys)} keys in the model")
         if modified_keys:
