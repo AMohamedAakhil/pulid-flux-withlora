@@ -316,9 +316,6 @@ def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cu
         model: The base model to apply LoRA weights to
         lora_path: Path to the LoRA. Can be:
             - Local file path
-            - HuggingFace URL (huggingface.co/...)
-            - CivitAI URL (civitai.com/...)
-            - Replicate model (owner/model or owner/model/version)
             - Direct URL to .safetensors file
         alpha: The weight to apply the LoRA (default: 1.0)
         device: Device to load the LoRA weights to (default: "cuda")
@@ -330,23 +327,36 @@ def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cu
         # Resolve the LoRA path to a local file
         local_path = resolve_lora_path(lora_path)
         if not local_path:
+            print(f"[LoRA] No valid local path found for {lora_path}")
             return model
             
-        print(f"Loading LoRA from: {local_path}")
+        print(f"[LoRA] Loading weights from: {local_path}")
         
         # Load LoRA weights
         lora_state_dict = load_sft(local_path, device=str(device))
+        print(f"[LoRA] Loaded {len(lora_state_dict)} keys from LoRA file")
         
         # Get original state dict
         orig_state_dict = model.state_dict()
+        print(f"[LoRA] Base model has {len(orig_state_dict)} keys")
         
+        # Find all LoRA keys
+        lora_keys = [k for k in lora_state_dict.keys() if 'lora_' in k]
+        print(f"[LoRA] Found {len(lora_keys)} LoRA keys")
+        
+        if not lora_keys:
+            print("[LoRA] Warning: No LoRA keys found in the loaded weights")
+            return model
+            
         # Apply LoRA weights
-        for key in lora_state_dict:
+        modified_keys = []
+        for key in lora_keys:
             if 'lora_down' in key:
                 base_key = key.replace('lora_down', '')
                 up_key = key.replace('lora_down', 'lora_up')
                 
                 if up_key in lora_state_dict and base_key in orig_state_dict:
+                    print(f"[LoRA] Applying LoRA to {base_key}")
                     # Compute the merged weights
                     down_weight = lora_state_dict[key].float()
                     up_weight = lora_state_dict[up_key].float()
@@ -355,13 +365,21 @@ def load_lora(model: Flux, lora_path: str, alpha: float = 1.0, device: str = "cu
                     delta = (up_weight @ down_weight) * alpha
                     orig_weight = orig_state_dict[base_key].float()
                     orig_state_dict[base_key] = (orig_weight + delta).to(orig_weight.dtype)
+                    modified_keys.append(base_key)
+        
+        print(f"[LoRA] Modified {len(modified_keys)} keys in the model")
         
         # Load the merged weights back into the model
         missing, unexpected = model.load_state_dict(orig_state_dict, strict=False)
-        print_load_warning(missing, unexpected)
+        if missing:
+            print(f"[LoRA] Missing keys after applying LoRA: {missing}")
+        if unexpected:
+            print(f"[LoRA] Unexpected keys after applying LoRA: {unexpected}")
         
         return model
         
     except Exception as e:
-        print(f"Warning: Failed to load LoRA from {lora_path}: {str(e)}")
+        print(f"[LoRA] Error loading LoRA from {lora_path}: {str(e)}")
+        import traceback
+        print("[LoRA] Full traceback:", traceback.format_exc())
         return model

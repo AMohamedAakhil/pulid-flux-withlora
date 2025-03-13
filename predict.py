@@ -171,11 +171,17 @@ class Predictor(BasePredictor):
 
         # Apply LoRA if provided
         if lora_path:
-            print(f"Loading LoRA from: {lora_path}")
+            print(f"[LoRA] Attempting to load LoRA from: {lora_path}")
+            print(f"[LoRA] Using scale: {lora_scale}")
             try:
+                print("[LoRA] Current model state dict keys:", list(self.model.state_dict().keys())[:5])
                 self.model = load_lora(self.model, lora_path, alpha=lora_scale, device=self.device)
+                print("[LoRA] Successfully loaded and applied LoRA weights")
+                print("[LoRA] Updated model state dict keys:", list(self.model.state_dict().keys())[:5])
             except Exception as e:
-                print(f"Warning: Failed to load LoRA: {str(e)}")
+                print(f"[LoRA] Warning: Failed to load LoRA: {str(e)}")
+                import traceback
+                print("[LoRA] Full traceback:", traceback.format_exc())
 
         # Generate a list of seeds for each output to ensure uniqueness
         if seed is None or seed == -1:
