@@ -277,10 +277,9 @@ def resolve_lora_path(lora_path: str) -> str:
     Resolve various LoRA path formats to a local file path.
     Supports:
     - Local files
-    - HuggingFace URLs (huggingface.co/...)
+    - Direct URLs (http(s)://...)
     - CivitAI URLs (civitai.com/...)
     - Replicate models (owner/model or owner/model/version)
-    - Direct URLs (http(s)://...)
     """
     if not lora_path:
         return None
@@ -296,21 +295,7 @@ def resolve_lora_path(lora_path: str) -> str:
     try:
         parsed = urlparse(lora_path)
         if parsed.scheme in ['http', 'https']:
-            if 'huggingface.co' in parsed.netloc:
-                # Remove the base URL and get repo_id/file_path
-                path = lora_path.replace('https://huggingface.co/', '')
-                if not path.endswith('.safetensors'):
-                    path = f"{path}/lora.safetensors"
-                repo_id = '/'.join(path.split('/')[:-1])
-                filename = path.split('/')[-1]
-                return hf_hub_download(
-                    repo_id=repo_id,
-                    filename=filename,
-                    local_dir=MODEL_CACHE,
-                    cache_dir=MODEL_CACHE,
-                    local_dir_use_symlinks=False
-                )
-            elif 'civitai.com' in parsed.netloc:
+            if 'civitai.com' in parsed.netloc:
                 return download_from_civitai(lora_path)
             else:
                 return download_from_url(lora_path)
